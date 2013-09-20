@@ -66,31 +66,48 @@ $ ->
                         add_cls k
 
         if ips = resp.Resp_InteractionPoints
+            for m in cm.doc.getAllMarks()
+                if m.title || m.readOnly
+                    m.clear()
+
             console.log ips
             rows = cm.doc.getValue().split('\n')
             l = 0
             h = 0
+
+            make_ip = (p,q) ->
+                {line:l1,ch:c1} = p
+                {line:l2,ch:c2} = q
+                cm.doc.markText (coord l1,c1),(coord l1,c1+2),
+                    atomic: true
+                    readOnly: true
+
+                cm.doc.markText (coord l2,c2-2),(coord l2,c2),
+                    atomic: true
+                    readOnly: true
+
+                cm.doc.markText p,q,
+                    className: "Hole"
+                    title: "#{h}"
+                h++
+
+            start = null
+
             for row in rows
                 c = 1
-                for [now,next] in zip (tail row), row
+                for [now,last] in zip (tail row), row
                     if now == "?"
-                        console.log l,c,now,next
+                        cm.doc.replaceRange "{! !}", (coord l,c), (coord l,c+1)
+                        make_ip (coord l,c), (coord l,c+5)
+                        c+=4
 
-                        cm.doc.replaceRange "  ", (coord l,c), (coord l,c+1)
+                    if last == "{" && now == "!"
+                        start = coord l,c-1
+                        console.log start
 
-                        cm.doc.replaceRange "!}", coord l,c+1
-                        cm.doc.markText (coord l,c+1),(coord l,c+3),
-                            atomic: true
-                            readOnly: true
-                        cm.doc.replaceRange "{! ", coord l,c
-                        cm.doc.markText (coord l,c),(coord l,c+2),
-                            atomic: true
-                            readOnly: true
-
-                        cm.doc.markText (coord l,c),(coord l,c+6),
-                            className: "Hole"
-                            title: "#{h}"
-                        h++
+                    if last == "!" && now == "}" && start
+                        make_ip start, coord l,c+1
+                        start = null
 
                     c++
                 l++
@@ -99,6 +116,21 @@ $ ->
             for _,v of info
                 console.log v
                 $("#info").html v
+
+        if ref = resp.Resp_GiveAction
+            console.log "give", ref
+            [ ip, o ] = ref
+            console.log ip, o
+            if ip? && o?
+                for k,s of o
+                    console.log k,s
+                    for m in cm.doc.getAllMarks()
+                        if m.title == "#{ip}"
+                            console.log m
+                            {from,to} = m.find()
+                            console.log from, to, s
+                            cm.doc.replaceRange s, from, to
+                            m.clear()
 
 
     typecheck = (cm) ->
@@ -110,21 +142,34 @@ $ ->
             m.clear()
         true
 
+    interaction = (k) ->
+        for m in cm.doc.findMarksAt(cm.doc.getCursor())
+            if m.title
+                k m
+
     km =
         'Ctrl-A': (cm) -> console.log "auto", cm
         'Ctrl-C': (cm) -> console.log "case", cm
         'Ctrl-,': (cm) ->
-            console.log "goal", cm
-            for m in cm.doc.findMarksAt(cm.doc.getCursor())
-                console.log m.title
-                if m.title
-                    console.log (Number m.title)
-                    ws.send JSON.stringify
-                        Goal: Number m.title
+            interaction (m) ->
+                ws.send JSON.stringify
+                    Goal: Number m.title
+
+        'Ctrl-Space': (cm) ->
+            interaction (m) ->
+                {from,to} = m.find()
+                txt = cm.doc.getRange(from,to)
+                txt = txt[2...txt.length-2]
+                console.log txt, m
+                o = Give:
+                        [ Number m.title
+                          txt
+                        ]
+                console.log o, JSON.stringify o
+                ws.send JSON.stringify o
 
 
         'Ctrl-.': (cm) -> console.log "goal and inferred", cm
-        'Ctrl-Space': (cm) -> console.log "give", cm
         'Ctrl-L': typecheck
 
     cm = CodeMirror ((elt) -> $("#area").prepend elt) ,
@@ -137,6 +182,12 @@ $ ->
 
             f : {A : Set} → A → A
             f x = ?
+
+            g : {A : Set} → A → A
+            g x = {! !}
+
+            h : {A : Set} → A → A
+            h x = ?
 
             data Empty : Set where
 

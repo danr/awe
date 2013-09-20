@@ -47,6 +47,7 @@ data ClientProtocol
     = ByeBye
     | Typecheck Text
     | Goal Int
+    | Give Int Text
   deriving Show
 
 $(deriveJSON id ''ClientProtocol)
@@ -120,5 +121,8 @@ interaction sink mq = catchImp $ void $ runTCM $ catchTCM $ do
                 loop file
             Goal i -> do
                 runInteraction (IOTCM file NonInteractive Direct (Cmd_goal_type B.Normalised (read (show i)) noRange ""))
+                loop file
+            Give i txt -> do
+                runInteraction (IOTCM file NonInteractive Direct (Cmd_give (read (show i)) noRange (T.unpack txt)))
                 loop file
 
