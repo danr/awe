@@ -34,16 +34,19 @@ import Agda.Utils.Impossible
 import Control.Concurrent.STM
 
 import Agda.Interaction.Response
+import qualified Agda.Interaction.BasicOps as B
 import Agda.Interaction.InteractionTop
 import Agda.Interaction.Highlighting.Precise hiding (String)
 import Agda.Interaction.Highlighting.Range
 import Agda.Utils.FileName
+import Agda.Syntax.Position (noRange)
 import qualified Agda.Syntax.Concrete as SC
 import qualified Agda.Syntax.Common as C
 
 data ClientProtocol
     = ByeBye
     | Typecheck Text
+    | Goal Int
   deriving Show
 
 $(deriveJSON id ''ClientProtocol)
@@ -114,5 +117,8 @@ interaction sink mq = catchImp $ void $ runTCM $ catchTCM $ do
             Typecheck t -> do
                 liftIO $ T.writeFile file t
                 runInteraction (IOTCM file NonInteractive Direct (Cmd_load file []))
+                loop file
+            Goal i -> do
+                runInteraction (IOTCM file NonInteractive Direct (Cmd_goal_type B.Normalised (read (show i)) noRange ""))
                 loop file
 

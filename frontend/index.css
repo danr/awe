@@ -27,5 +27,7 @@
 .IncompletePattern  { color: black; background: #F5DEB3        }
 .Error              { color: red;   text-decoration: underline }
 
+.Hole               { color: black; background: cyan }
+
 /* Standard attributes. */
 a { text-decoration: none }
