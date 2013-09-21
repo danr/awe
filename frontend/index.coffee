@@ -1,6 +1,4 @@
 $ ->
-    pairs = (m) -> ([k,v] for k,v in m)
-
     zip = (as,bs) ->
         bp = 0
         res = []
@@ -18,27 +16,7 @@ $ ->
         line: y
         ch: x
 
-    console.log zip "abc",tail "1234"
-    console.log tail "abcde"
-
-    abs_to_line = (s) ->
-        rows = s.split('\n')
-        (v) ->
-            l = 0
-            vc = v - 1
-            res = null
-            for r in rows
-                if vc <= r.length
-                    res =
-                        line: l
-                        ch: vc
-                    break
-                else
-                    l++
-                    vc-=r.length+1
-            res
-
-    abstoline = ->
+    highlight_gen = null
 
     ws = new WebSocket "ws://127.0.0.1:8000/"
 
@@ -47,11 +25,11 @@ $ ->
         console.log resp
         switch resp.tag
             when "HighlightingInfo"
-                if cm.doc.isClean (abstoline.generation)
+                if cm.doc.isClean highlight_gen
                     if rngs = resp.contents[0]?.ranges
                         for [[l,u],o] in rngs
                             add_cls = (cl) ->
-                                cm.doc.markText abstoline(l), abstoline(u),
+                                cm.doc.markText cm.doc.posFromIndex(l-1), cm.doc.posFromIndex(u-1),
                                     className: cl
                             if o.aspect
                                 add_cls o.aspect.tag
@@ -60,6 +38,8 @@ $ ->
                                     if i then add_cls "#{i.contents}#{i.tag}"
                             for other in o.otherAspects
                                 add_cls other
+                        if o.definitionSite
+                            console.log o.definitionSite
             when "InteractionPoints"
                 ips = resp.contents
                 for m in cm.doc.getAllMarks()
@@ -134,14 +114,14 @@ $ ->
                     m.clear()
                 {line} = cm.doc.getCursor()
                 cm.doc.setLine line, resp.contents.join("\n")
-                setTimeout (-> typecheck(cm)), 100
+                setTimeout (-> typecheck(cm)), 10
 
             when "MakeCase"
                 for m in cm.doc.getAllMarks()
                     m.clear()
                 {line} = cm.doc.getCursor()
                 cm.doc.setLine line, resp.contents[1].join("\n")
-                setTimeout (-> typecheck(cm)), 100
+                setTimeout (-> typecheck(cm)), 10
 
     typecheck = (cm) ->
         console.log "load", cm
@@ -150,8 +130,7 @@ $ ->
             txt: cm.doc.getValue()
         for m in cm.doc.getAllMarks()
             m.clear()
-        abstoline = abs_to_line cm.doc.getValue()
-        abstoline.generation = cm.doc.changeGeneration()
+        highlight_gen = cm.doc.changeGeneration()
         true
 
     interaction = (k) ->
@@ -168,6 +147,13 @@ $ ->
             k m, txt
 
     km =
+        'Ctrl-R': (cm) ->
+            interactionText (m, txt) ->
+                ws.send JSON.stringify
+                    tag: "Refine"
+                    ip:  Number m.title
+                    txt: txt
+
         'Ctrl-A': (cm) ->
             interactionText (m, txt) ->
                 ws.send JSON.stringify
@@ -180,6 +166,14 @@ $ ->
                 if txt.trim().length > 0 # not only spaces
                     ws.send JSON.stringify
                         tag: "Case"
+                        ip:  Number m.title
+                        txt: txt
+
+        'Ctrl-N': (cm) ->
+            interactionText (m, txt) ->
+                if txt.trim().length > 0 # not only spaces
+                    ws.send JSON.stringify
+                        tag: "Normalise"
                         ip:  Number m.title
                         txt: txt
 
@@ -208,6 +202,18 @@ $ ->
     cm = CodeMirror ((elt) -> $("#area").prepend elt) ,
         value: """
             module Test where
+
+            {-
+                Ctrl-L     : typecheck
+                Ctrl-Space : give
+                Ctrl-.     : goal
+                Ctrl-,     : goal and inferred
+                Ctrl-N     : normalise
+                Ctrl-C     : case
+                Ctrl-A     : auto
+                Ctrl-R     : refine
+                Ctrl-D     : deactivate highlighting
+            -}
 
             data _+_ (A B : Set) : Set where
                 inl : (l : A) -> A + B

@@ -1,3 +1,6 @@
+.CodeMirror {
+    height: 600px
+}
 
 /* Aspects. */
 .Comment       { color: #B22222 }

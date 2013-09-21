@@ -51,6 +51,8 @@ data ClientProtocol
     | GoalAndInferred { ip :: Int, txt :: Text }
     | Case            { ip :: Int, txt :: Text }
     | Auto            { ip :: Int, txt :: Text }
+    | Refine          { ip :: Int, txt :: Text }
+    | Normalise       { ip :: Int, txt :: Text }
   deriving Show
 
 data ServerProtocol = ServerError String | Response Response
@@ -126,6 +128,10 @@ toCmd _    cl = return $ Just $ case cl of
     Give{ip,txt}            -> Cmd_give (read (show ip)) noRange (T.unpack txt)
     Case{ip,txt}            -> Cmd_make_case (read (show ip)) noRange (T.unpack txt)
     Auto{ip,txt}            -> Cmd_auto (read (show ip)) noRange (T.unpack txt)
+    Refine{ip,txt}          -> Cmd_refine_or_intro False {- assume not in a pattern-matching lambda -}
+                                   (read (show ip)) noRange (T.unpack txt)
+    Normalise{ip,txt}       -> Cmd_compute False {- don't ignore abstract or now -}
+                                   (read (show ip)) noRange (T.unpack txt)
     ByeBye{}                -> error "impossible"
     Typecheck{}             -> error "impossible"
 
