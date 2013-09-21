@@ -107,6 +107,10 @@ $ ->
                         c++
                     l++
 
+            when "RunningInfo"
+                v = resp.contents[1]
+                $("#info").html v
+
             when "DisplayInfo"
                 v = resp.contents.contents
                 $("#info").html v
@@ -125,25 +129,60 @@ $ ->
                         cm.doc.replaceRange txt, from, to
                         break
 
+            when "MakeCaseAction"
+                for m in cm.doc.getAllMarks()
+                    m.clear()
+                {line} = cm.doc.getCursor()
+                cm.doc.setLine line, resp.contents.join("\n")
+                setTimeout (-> typecheck(cm)), 100
+
+            when "MakeCase"
+                for m in cm.doc.getAllMarks()
+                    m.clear()
+                {line} = cm.doc.getCursor()
+                cm.doc.setLine line, resp.contents[1].join("\n")
+                setTimeout (-> typecheck(cm)), 100
+
     typecheck = (cm) ->
         console.log "load", cm
-        abstoline = abs_to_line cm.doc.getValue()
-        abstoline.generation = cm.doc.changeGeneration()
         ws.send JSON.stringify
             tag: "Typecheck"
             txt: cm.doc.getValue()
         for m in cm.doc.getAllMarks()
             m.clear()
+        abstoline = abs_to_line cm.doc.getValue()
+        abstoline.generation = cm.doc.changeGeneration()
         true
 
     interaction = (k) ->
         for m in cm.doc.findMarksAt(cm.doc.getCursor())
             if m.title
                 k m
+                break
+
+    interactionText = (k) ->
+        interaction (m) ->
+            {from,to} = m.find()
+            txt = cm.doc.getRange(from,to)
+            txt = txt[2...txt.length-2]
+            k m, txt
 
     km =
-        'Ctrl-A': (cm) -> console.log "auto", cm
-        'Ctrl-C': (cm) -> console.log "case", cm
+        'Ctrl-A': (cm) ->
+            interactionText (m, txt) ->
+                ws.send JSON.stringify
+                    tag: "Auto"
+                    ip:  Number m.title
+                    txt: txt
+
+        'Ctrl-C': (cm) ->
+            interactionText (m, txt) ->
+                if txt.trim().length > 0 # not only spaces
+                    ws.send JSON.stringify
+                        tag: "Case"
+                        ip:  Number m.title
+                        txt: txt
+
         'Ctrl-,': (cm) ->
             interaction (m) ->
                 ws.send JSON.stringify
@@ -151,18 +190,19 @@ $ ->
                     ip:  Number m.title
 
         'Ctrl-Space': (cm) ->
-            interaction (m) ->
-                {from,to} = m.find()
-                txt = cm.doc.getRange(from,to)
-                txt = txt[2...txt.length-2]
-                o =
+            interactionText (m, txt) ->
+                ws.send JSON.stringify
                     tag: "Give"
                     ip:  Number m.title
                     txt: txt
-                ws.send JSON.stringify o
 
+        'Ctrl-.': (cm) ->
+            interactionText (m, txt) ->
+                ws.send JSON.stringify
+                    tag: "GoalAndInferred"
+                    ip:  Number m.title
+                    txt: txt
 
-        'Ctrl-.': (cm) -> console.log "goal and inferred", cm
         'Ctrl-L': typecheck
 
     cm = CodeMirror ((elt) -> $("#area").prepend elt) ,
@@ -170,11 +210,11 @@ $ ->
             module Test where
 
             data _+_ (A B : Set) : Set where
-                inl : A -> A + B
-                inr : B -> A + B
+                inl : (l : A) -> A + B
+                inr : (r : B) -> A + B
 
             data _*_ (A B : Set) : Set where
-                _,_ : A -> B -> A * B
+                _,_ : (a : A) (b : B) -> A * B
 
             data Bot : Set where
 
@@ -182,7 +222,7 @@ $ ->
             not A = A -> Bot
 
             deMorgan : {A B : Set} -> not A * not B -> not (A + B)
-            deMorgan = {!!}
+            deMorgan a b = {!!}
             """
         extraKeys: km
         cursorBlinkRate: 0

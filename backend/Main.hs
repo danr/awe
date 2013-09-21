@@ -45,9 +45,12 @@ import qualified Agda.Syntax.Common as C
 
 data ClientProtocol
     = ByeBye
-    | Typecheck { txt :: Text }
-    | Goal { ip :: Int }
-    | Give { ip :: Int, txt :: Text }
+    | Typecheck       { txt :: Text }
+    | Goal            { ip :: Int }
+    | Give            { ip :: Int, txt :: Text }
+    | GoalAndInferred { ip :: Int, txt :: Text }
+    | Case            { ip :: Int, txt :: Text }
+    | Auto            { ip :: Int, txt :: Text }
   deriving Show
 
 data ServerProtocol = ServerError String | Response Response
@@ -118,10 +121,13 @@ toCmd file (Typecheck{txt}) = do
     T.writeFile file txt
     return $ Just $ Cmd_load file []
 toCmd _    cl = return $ Just $ case cl of
-    Goal{ip}     -> Cmd_goal_type B.Normalised (read (show ip)) noRange ""
-    Give{ip,txt} -> Cmd_give (read (show ip)) noRange (T.unpack txt)
-    ByeBye{}     -> error "impossible"
-    Typecheck{}  -> error "impossible"
+    Goal{ip}                -> Cmd_goal_type_context B.Normalised (read (show ip)) noRange ""
+    GoalAndInferred{ip,txt} -> Cmd_goal_type_context_infer B.Normalised (read (show ip)) noRange (T.unpack txt)
+    Give{ip,txt}            -> Cmd_give (read (show ip)) noRange (T.unpack txt)
+    Case{ip,txt}            -> Cmd_make_case (read (show ip)) noRange (T.unpack txt)
+    Auto{ip,txt}            -> Cmd_auto (read (show ip)) noRange (T.unpack txt)
+    ByeBye{}                -> error "impossible"
+    Typecheck{}             -> error "impossible"
 
 interaction :: Sink Hybi10 -> TQueue ClientProtocol -> IO ()
 interaction sink mq = catchImp $ void $ runTCM $ catchTCM $ do
