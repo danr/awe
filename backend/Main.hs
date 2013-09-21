@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric,  CPP, TemplateHaskell, TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE DeriveGeneric,  CPP, TemplateHaskell, TypeSynonymInstances, FlexibleInstances, NamedFieldPuns #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Main where
 
@@ -45,16 +45,23 @@ import qualified Agda.Syntax.Common as C
 
 data ClientProtocol
     = ByeBye
-    | Typecheck Text
-    | Goal Int
-    | Give Int Text
+    | Typecheck { txt :: Text }
+    | Goal { ip :: Int }
+    | Give { ip :: Int, txt :: Text }
   deriving Show
 
-$(deriveJSON id ''ClientProtocol)
+data ServerProtocol = ServerError String | Response Response
 
-data ServerProtocol = ErrMsg String | Response Response
+instance ToJSON ServerProtocol where
+    toJSON (Response r)    = toJSON r
+    toJSON (ServerError s) = object
+        [ T.pack "tag" .= String (T.pack "ServerError")
+        , T.pack "contents" .= String (T.pack s)
+        ]
 
-#define JSON(t) $(deriveToJSON id ''t)
+$(deriveFromJSON defaultOptions ''ClientProtocol)
+
+#define JSON(t) $(deriveToJSON defaultOptions ''t)
 #define JSON_ignore(t) instance ToJSON t where; toJSON _ = Null
 
 instance ToJSON Doc where
@@ -67,8 +74,9 @@ JSON_ignore(ModuleToSource)
 JSON_ignore(AbsolutePath)
 JSON_ignore(SC.Expr)
 
-JSON(ServerProtocol)
-JSON(Response)
+$(deriveToJSON defaultOptions { constructorTagModifier = drop 5 } ''Response)
+                                -- drop Resp_ from Response constructors
+
 JSON(GiveResult)
 JSON(InteractionId)
 JSON(Status)
@@ -91,9 +99,12 @@ handle rq = do
     sink <- getSink
     mq <- liftIO $ newTQueueIO
     void $ liftIO $ forkIO $ interaction sink mq
-    forever (maybe (return ()) (liftIO . atomically . writeTQueue mq) =<< receiveJSON)
-        `catchWsError`
-       \ _ -> liftIO $ atomically $ writeTQueue mq ByeBye
+    let body = do
+            d <- receiveData
+            liftIO $ case decode d of
+                Just msg -> atomically (writeTQueue mq msg)
+                Nothing  -> sendJSON sink (ServerError $ "Cannot parse: " ++ show d)
+    forever body `catchWsError` \ _ -> liftIO $ atomically $ writeTQueue mq ByeBye
 
 receiveJSON :: FromJSON a => WebSockets Hybi10 (Maybe a)
 receiveJSON = fmap decode receiveData
@@ -101,28 +112,32 @@ receiveJSON = fmap decode receiveData
 sendJSON :: ToJSON a => Sink Hybi10 -> a -> IO ()
 sendJSON s = sendSink s . DataMessage . Text . encode
 
+toCmd :: FilePath -> ClientProtocol -> IO (Maybe Interaction)
+toCmd _    ByeBye           = return Nothing
+toCmd file (Typecheck{txt}) = do
+    T.writeFile file txt
+    return $ Just $ Cmd_load file []
+toCmd _    cl = return $ Just $ case cl of
+    Goal{ip}     -> Cmd_goal_type B.Normalised (read (show ip)) noRange ""
+    Give{ip,txt} -> Cmd_give (read (show ip)) noRange (T.unpack txt)
+    ByeBye{}     -> error "impossible"
+    Typecheck{}  -> error "impossible"
+
 interaction :: Sink Hybi10 -> TQueue ClientProtocol -> IO ()
 interaction sink mq = catchImp $ void $ runTCM $ catchTCM $ do
     setInteractionOutputCallback (liftIO . sendJSON sink . Response)
     let file = "/tmp/Test.agda" -- TODO: make a new name for each client
     evalStateT (loop file) initCommandState
   where
-    catchTCM m = catchError m      (liftIO . sendJSON sink . ErrMsg <=< prettyError)
-    catchImp m = catchImpossible m (sendJSON sink . ErrMsg . show)
+    catchTCM m = catchError m      (liftIO . sendJSON sink . ServerError <=< prettyError)
+    catchImp m = catchImpossible m (sendJSON sink . ServerError . show)
 
     loop :: FilePath -> CommandM ()
     loop file = do
-        msg <- liftIO (atomically (readTQueue mq))
-        case msg of
-            ByeBye -> return ()
-            Typecheck t -> do
-                liftIO $ T.writeFile file t
-                runInteraction (IOTCM file NonInteractive Direct (Cmd_load file []))
-                loop file
-            Goal i -> do
-                runInteraction (IOTCM file NonInteractive Direct (Cmd_goal_type B.Normalised (read (show i)) noRange ""))
-                loop file
-            Give i txt -> do
-                runInteraction (IOTCM file NonInteractive Direct (Cmd_give (read (show i)) noRange (T.unpack txt)))
+        m_cmd <- liftIO (toCmd file =<< atomically (readTQueue mq))
+        case m_cmd of
+            Nothing -> return ()
+            Just cmd -> do
+                runInteraction (IOTCM file NonInteractive Direct cmd)
                 loop file
 

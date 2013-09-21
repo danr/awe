@@ -43,101 +43,95 @@ $ ->
     ws = new WebSocket "ws://127.0.0.1:8000/"
 
     ws.onmessage = (evt) ->
-        data = JSON.parse evt.data
-        console.log data
-        resp = data.Response
+        resp = JSON.parse evt.data
         console.log resp
-        if rngs = resp.Resp_HighlightingInfo?[0].ranges
-            for [[l,u],o] in rngs
-                add_cls = (cl) ->
-                    # console.log abstoline(l),abstoline(u),cl,o
-                    cm.doc.markText abstoline(l), abstoline(u),
-                        className: cl
-                for k,v of o.aspect
-                    add_cls k
-                    if k == "Name"
-                        for nm,sp of v[0]
-                            add_cls nm
-                            for ty,_ of sp
-                                cl = "#{ty}#{nm}"
-                                add_cls cl
-                for other in o.otherAspects
-                    for k,v of other
-                        add_cls k
+        switch resp.tag
+            when "HighlightingInfo"
+                if cm.doc.isClean (abstoline.generation)
+                    if rngs = resp.contents[0]?.ranges
+                        for [[l,u],o] in rngs
+                            add_cls = (cl) ->
+                                cm.doc.markText abstoline(l), abstoline(u),
+                                    className: cl
+                            if o.aspect
+                                add_cls o.aspect.tag
+                                for i in o.aspect.contents
+                                    add_cls i.tag
+                                    if i then add_cls "#{i.contents}#{i.tag}"
+                            for other in o.otherAspects
+                                add_cls other
+            when "InteractionPoints"
+                ips = resp.contents
+                for m in cm.doc.getAllMarks()
+                    if m.title || m.readOnly
+                        m.clear()
 
-        if ips = resp.Resp_InteractionPoints
-            for m in cm.doc.getAllMarks()
-                if m.title || m.readOnly
-                    m.clear()
+                rows = cm.doc.getValue().split('\n')
+                l = 0
+                h = 0
 
-            console.log ips
-            rows = cm.doc.getValue().split('\n')
-            l = 0
-            h = 0
+                make_ip = (p,q) ->
+                    {line:l1,ch:c1} = p
+                    {line:l2,ch:c2} = q
+                    cm.doc.markText (coord l1,c1),(coord l1,c1+2),
+                        atomic: true
+                        readOnly: true
 
-            make_ip = (p,q) ->
-                {line:l1,ch:c1} = p
-                {line:l2,ch:c2} = q
-                cm.doc.markText (coord l1,c1),(coord l1,c1+2),
-                    atomic: true
-                    readOnly: true
+                    cm.doc.markText (coord l2,c2-2),(coord l2,c2),
+                        atomic: true
+                        readOnly: true
 
-                cm.doc.markText (coord l2,c2-2),(coord l2,c2),
-                    atomic: true
-                    readOnly: true
+                    console.log "Interaction point #{ips[h]} at",p,q
+                    cm.doc.markText p,q,
+                        className: "Hole"
+                        title: "#{ips[h]}"
+                    h++
 
-                cm.doc.markText p,q,
-                    className: "Hole"
-                    title: "#{h}"
-                h++
+                start = null
 
-            start = null
+                for row in rows
+                    c = 1
+                    for [now,last] in zip (tail row), row
+                        if now == "?"
+                            cm.doc.replaceRange "{! !}", (coord l,c), (coord l,c+1)
+                            make_ip (coord l,c), (coord l,c+5)
+                            c+=4
 
-            for row in rows
-                c = 1
-                for [now,last] in zip (tail row), row
-                    if now == "?"
-                        cm.doc.replaceRange "{! !}", (coord l,c), (coord l,c+1)
-                        make_ip (coord l,c), (coord l,c+5)
-                        c+=4
+                        if last == "{" && now == "!"
+                            start = coord l,c-1
 
-                    if last == "{" && now == "!"
-                        start = coord l,c-1
-                        console.log start
+                        if last == "!" && now == "}" && start
+                            make_ip start, coord l,c+1
+                            start = null
 
-                    if last == "!" && now == "}" && start
-                        make_ip start, coord l,c+1
-                        start = null
+                        c++
+                    l++
 
-                    c++
-                l++
-
-        if info = resp.Resp_DisplayInfo
-            for _,v of info
-                console.log v
+            when "DisplayInfo"
+                v = resp.contents.contents
                 $("#info").html v
 
-        if ref = resp.Resp_GiveAction
-            console.log "give", ref
-            [ ip, o ] = ref
-            console.log ip, o
-            if ip? && o?
-                for k,s of o
-                    console.log k,s
-                    for m in cm.doc.getAllMarks()
-                        if m.title == "#{ip}"
-                            console.log m
-                            {from,to} = m.find()
-                            console.log from, to, s
-                            cm.doc.replaceRange s, from, to
-                            m.clear()
-
+            when "GiveAction"
+                [ ip, { contents:txt } ] = resp.contents
+                for m in cm.doc.getAllMarks()
+                    if m.title == "#{ip}"
+                        console.log ip, txt, m
+                        {from,to} = m.find()
+                        console.log from, to, txt
+                        for pos in [from,to]
+                            for s in cm.doc.findMarksAt pos
+                                s.clear() # delete the {! and !} marks
+                        m.clear()
+                        cm.doc.replaceRange txt, from, to
+                        break
 
     typecheck = (cm) ->
         console.log "load", cm
         abstoline = abs_to_line cm.doc.getValue()
+        abstoline.generation = cm.doc.changeGeneration()
         ws.send JSON.stringify
-            Typecheck: cm.doc.getValue()
+            tag: "Typecheck"
+            txt: cm.doc.getValue()
         for m in cm.doc.getAllMarks()
             m.clear()
         true
@@ -153,19 +147,18 @@ $ ->
         'Ctrl-,': (cm) ->
             interaction (m) ->
                 ws.send JSON.stringify
-                    Goal: Number m.title
+                    tag: "Goal"
+                    ip:  Number m.title
 
         'Ctrl-Space': (cm) ->
             interaction (m) ->
                 {from,to} = m.find()
                 txt = cm.doc.getRange(from,to)
                 txt = txt[2...txt.length-2]
-                console.log txt, m
-                o = Give:
-                        [ Number m.title
-                          txt
-                        ]
-                console.log o, JSON.stringify o
+                o =
+                    tag: "Give"
+                    ip:  Number m.title
+                    txt: txt
                 ws.send JSON.stringify o
 
 
@@ -176,27 +169,20 @@ $ ->
         value: """
             module Test where
 
-            data Nat : Set where
-                zero : Nat
-                suc  : Nat → Nat
+            data _+_ (A B : Set) : Set where
+                inl : A -> A + B
+                inr : B -> A + B
 
-            f : {A : Set} → A → A
-            f x = ?
+            data _*_ (A B : Set) : Set where
+                _,_ : A -> B -> A * B
 
-            g : {A : Set} → A → A
-            g x = {! !}
+            data Bot : Set where
 
-            h : {A : Set} → A → A
-            h x = ?
+            not_ : Set -> Set
+            not A = A -> Bot
 
-            data Empty : Set where
-
-            bot-elim : {A : Set} -> Empty -> A
-            bot-elim ()
-
-            _+_ : Nat -> Nat -> Nat
-            zero + b = b
-            suc a + b = suc (a + b)
+            deMorgan : {A B : Set} -> not A * not B -> not (A + B)
+            deMorgan = {!!}
             """
         extraKeys: km
         cursorBlinkRate: 0
