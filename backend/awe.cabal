@@ -16,6 +16,7 @@ executable awe
       , Agda       >= 2.3.2
       , aeson      >= 0.6.2.0 && < 0.6.3
       , websockets >= 0.7.3
+      , directory
       , pretty
       , mtl
       , containers

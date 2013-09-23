@@ -16,6 +16,7 @@ import Control.Monad.Error
 -- import Data.Map (Map)
 -- import qualified Data.Map as Map
 --
+import System.Directory
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
@@ -95,15 +96,21 @@ JSON(C.Induction)
 JSON(DisplayInfo)
 
 main :: IO ()
-main = runServer "0.0.0.0" 8000 handle
+main = do
+    ir <- newTVarIO (0 :: Int)
+    runServer "0.0.0.0" 8000 (handle ir)
 
-handle :: Request -> WebSockets Hybi10 ()
-handle rq = do
+handle :: TVar Int -> Request -> WebSockets Hybi10 ()
+handle ir rq = do
+    me <- liftIO $ atomically $ do
+        v <- readTVar ir
+        modifyTVar ir succ
+        return v
     acceptRequest rq
     spawnPingThread 1
     sink <- getSink
     mq <- liftIO $ newTQueueIO
-    void $ liftIO $ forkIO $ interaction sink mq
+    void $ liftIO $ forkIO $ interaction me sink mq
     let body = do
             d <- receiveData
             liftIO $ case decode d of
@@ -123,24 +130,33 @@ toCmd file (Typecheck{txt}) = do
     T.writeFile file txt
     return $ Just $ Cmd_load file []
 toCmd _    cl = return $ Just $ case cl of
-    Goal{ip}                -> Cmd_goal_type_context B.Normalised (read (show ip)) noRange ""
-    GoalAndInferred{ip,txt} -> Cmd_goal_type_context_infer B.Normalised (read (show ip)) noRange (T.unpack txt)
-    Give{ip,txt}            -> Cmd_give (read (show ip)) noRange (T.unpack txt)
-    Case{ip,txt}            -> Cmd_make_case (read (show ip)) noRange (T.unpack txt)
-    Auto{ip,txt}            -> Cmd_auto (read (show ip)) noRange (T.unpack txt)
-    Refine{ip,txt}          -> Cmd_refine_or_intro False {- assume not in a pattern-matching lambda -}
-                                   (read (show ip)) noRange (T.unpack txt)
-    Normalise{ip,txt}       -> Cmd_compute False {- don't ignore abstract or now -}
-                                   (read (show ip)) noRange (T.unpack txt)
-    ByeBye{}                -> error "impossible"
-    Typecheck{}             -> error "impossible"
+    Goal{}            -> Cmd_goal_type_context B.Normalised ip' noRange ""
+    GoalAndInferred{} -> Cmd_goal_type_context_infer B.Normalised ip' noRange txt'
+    Give{}            -> Cmd_give ip' noRange txt'
+    Case{}            -> Cmd_make_case ip' noRange txt'
+    Auto{}            -> Cmd_auto ip' noRange txt'
+    Refine{}          -> Cmd_refine_or_intro False {- assume not in a pattern-matching lambda -}
+                                   ip' noRange txt'
+    Normalise{}       -> Cmd_compute False {- don't ignore abstract or now -}
+                                   ip' noRange txt'
+    ByeBye{}          -> error "impossible"
+    Typecheck{}       -> error "impossible"
+  where
+    ip' = read (show (ip cl))
+    txt' = T.unpack (txt cl)
 
-interaction :: Sink Hybi10 -> TQueue ClientProtocol -> IO ()
-interaction sink mq = catchImp $ void $ runTCM $ catchTCM $ do
+interaction :: Int -> Sink Hybi10 -> TQueue ClientProtocol -> IO ()
+interaction me sink mq = catchImp $ void $ runTCM $ catchTCM $ do
     setInteractionOutputCallback (liftIO . sendJSON sink . Response)
-    let file = "/tmp/Test.agda" -- TODO: make a new name for each client
+    let dir  = "/tmp/" ++ show me
+        file = dir ++ "/Test.agda"
+    liftIO $ createDirectoryIfMissing True dir
+    msg $ "Serving " ++ file
     evalStateT (loop file) initCommandState
   where
+    msg :: MonadIO m => String -> m ()
+    msg = liftIO . putStrLn . (show me ++) . (":" ++)
+
     catchTCM m = catchError m      (liftIO . sendJSON sink . ServerError <=< prettyError)
     catchImp m = catchImpossible m (sendJSON sink . ServerError . show)
 
@@ -150,6 +166,8 @@ interaction sink mq = catchImp $ void $ runTCM $ catchTCM $ do
         case m_cmd of
             Nothing -> return ()
             Just cmd -> do
+                msg "got command"
                 runInteraction (IOTCM file NonInteractive Direct cmd)
+                msg "command finished"
                 loop file
 
