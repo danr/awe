@@ -96,6 +96,10 @@ $ ->
 
     set_info = (info) -> $("#info").html info
 
+    ws.onopen = ->
+        set_info "Connected"
+        typecheck()
+
     give_action = (ip,txt) ->
         for m in cm.doc.getAllMarks()
             if m.title == "#{ip}"
@@ -148,16 +152,16 @@ $ ->
             txt = txt[2...txt.length-2]
             k m, txt
 
-    interactionTextCmd = (cmd,not_only_spaces) ->
+    interactionTextCmd = (cmd,not_only_spaces,do_trim) ->
         interactionText (m, txt) ->
             if (not not_only_spaces) || txt.trim().length > 0
                 ws.send JSON.stringify
                     tag: cmd
                     ip:  Number m.title
-                    txt: txt
+                    txt: if do_trim then txt.trim() else txt
 
     km =
-        'Ctrl-R':     -> interactionTextCmd "Refine"
+        'Ctrl-R':     -> interactionTextCmd "Refine", false, true
         'Ctrl-A':     -> interactionTextCmd "Auto"
         'Ctrl-C':     -> interactionTextCmd "Case", true
         'Ctrl-N':     -> interactionTextCmd "Normalise", true
@@ -183,6 +187,36 @@ $ ->
                 Ctrl-D     : deactivate highlighting
             -}
 
+            data Nat : Set where
+              zero : Nat
+              suc : (n : Nat) → Nat
+
+            data _==_ (x : Nat) : Nat → Set where
+              refl : x == x
+
+            data _/=_ : Nat → Nat → Set where
+              z/=s : ∀ {n} → zero /= suc n
+              s/=z : ∀ {n} → suc n /= zero
+              s/=s : ∀ {m n} → m /= n → suc m /= suc n
+
+            data Equal (m n : Nat) : Set where
+              yes : m == n → Equal m n
+              no : m /= n → Equal m n
+
+            data ⊥ : Set where
+
+            isEqual : (m n : Nat) → Equal m n
+            isEqual = {!!}
+
+            equality-disjoint : (m n : Nat) → m == n → m /= n → ⊥
+            equality-disjoint = {!!}
+            """
+        extraKeys: km
+        cursorBlinkRate: 0
+
+    # setTimeout typecheck, 300
+
+    ###
             data _+_ (A B : Set) : Set where
                 inl : (l : A) -> A + B
                 inr : (r : B) -> A + B
@@ -197,8 +231,4 @@ $ ->
 
             deMorgan : {A B : Set} -> not A * not B -> not (A + B)
             deMorgan a b = {!!}
-            """
-        extraKeys: km
-        cursorBlinkRate: 0
-
-    setTimeout typecheck, 300
+    ###
