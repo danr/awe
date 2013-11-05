@@ -1,4 +1,4 @@
-{-# LANGUAGE DeriveGeneric,  CPP, TemplateHaskell, TypeSynonymInstances, FlexibleInstances, NamedFieldPuns #-}
+{-# LANGUAGE DeriveGeneric,  CPP, TemplateHaskell, TypeSynonymInstances, FlexibleInstances, NamedFieldPuns, ScopedTypeVariables #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Main where
 
@@ -9,40 +9,33 @@ import Data.Aeson.TH
 
 import Control.Monad.State
 import Control.Monad.Error
--- import Control.Applicative
 
--- import Data.Maybe
--- import Data.List
--- import Data.Map (Map)
--- import qualified Data.Map as Map
---
+import qualified Control.Exception as E
+
 import System.Directory
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
-import Network.WebSockets
-
-import Control.Concurrent (forkIO)
-
-import Agda.Interaction.FindFile
-
-import Agda.TypeChecking.Monad hiding (MetaInfo)
-import Agda.TypeChecking.Errors
-
-import Agda.Utils.Impossible
+import Network.WebSockets hiding (Response)
 
 import Control.Concurrent.STM
 
-import Agda.Interaction.Response
-import qualified Agda.Interaction.BasicOps as B
-import Agda.Interaction.InteractionTop
+import Agda.Interaction.FindFile
 import Agda.Interaction.Highlighting.Precise hiding (String)
 import Agda.Interaction.Highlighting.Range
-import Agda.Utils.FileName
+import Agda.Interaction.InteractionTop
+import Agda.Interaction.Response
+import qualified Agda.Interaction.BasicOps as B
+
 import Agda.Syntax.Position (noRange)
-import qualified Agda.Syntax.Concrete as SC
 import qualified Agda.Syntax.Common as C
+import qualified Agda.Syntax.Concrete as SC
+
+import Agda.TypeChecking.Errors
+import Agda.TypeChecking.Monad hiding (MetaInfo)
+import Agda.Utils.FileName
+import Agda.Utils.Impossible
 
 data ClientProtocol
     = ByeBye
@@ -57,6 +50,92 @@ data ClientProtocol
   deriving Show
 
 data ServerProtocol = ServerError String | Response Response
+
+
+----------------------------------------------------------------
+-- Main
+
+main :: IO ()
+main = do
+    ir <- newTVarIO (0 :: Int)
+    runServer "0.0.0.0" 8000 (handle ir)
+
+handle :: TVar Int -> PendingConnection -> IO ()
+handle ir pc = do
+    conn <- acceptRequest pc
+
+    me <- liftIO $ atomically $ do
+        v <- readTVar ir
+        modifyTVar ir succ
+        return v
+
+    interaction me conn
+        `E.catch` \ ConnectionClosed -> return ()
+        `E.catch` \ (_ :: HandshakeException) -> return ()
+
+toCmd :: FilePath -> ClientProtocol -> IO (Maybe Interaction)
+toCmd _    ByeBye           = return Nothing
+toCmd file (Typecheck{txt}) = do
+    T.writeFile file txt
+    return $ Just $ Cmd_load file []
+toCmd _    cl = return $ Just $ case cl of
+    Goal{}            -> Cmd_goal_type_context B.Normalised ip' noRange ""
+    GoalAndInferred{} -> Cmd_goal_type_context_infer B.Normalised ip' noRange txt'
+    Give{}            -> Cmd_give ip' noRange txt'
+    Case{}            -> Cmd_make_case ip' noRange txt'
+    Auto{}            -> Cmd_auto ip' noRange txt'
+    Refine{}          -> Cmd_refine_or_intro False {- assume not in a pattern-matching lambda -}
+                                   ip' noRange txt'
+    Normalise{}       -> Cmd_compute False {- don't ignore abstract or now -}
+                                   ip' noRange txt'
+    ByeBye{}          -> error "impossible"
+    Typecheck{}       -> error "impossible"
+  where
+    ip' = read (show (ip cl))
+    txt' = T.unpack (txt cl)
+
+interaction :: Int -> Connection -> IO ()
+interaction me conn = catchImp $ void $ runTCM $ catchTCM $ do
+    modify $ \ st -> st { stInteractionOutputCallback = liftIO . sendJSON conn . Response }
+    liftIO $ createDirectoryIfMissing True dir
+    msg $ "Serving " ++ file
+    evalStateT (unCommandM loop) initCommandState
+  where
+    dir  = "/tmp/" ++ show me
+    file = dir ++ "/Test.agda"
+
+    msg :: MonadIO m => String -> m ()
+    msg = liftIO . putStrLn . (show me ++) . (":" ++)
+
+    catchTCM m = catchError m      (liftIO . sendJSON conn . ServerError <=< prettyError)
+    catchImp m = catchImpossible m (sendJSON conn . ServerError . show)
+
+    loop :: CommandM ()
+    loop = do
+        m_cmd <- liftIO (toCmd file =<< recv)
+        case m_cmd of
+            Nothing -> msg "Terminating"
+            Just cmd -> do
+                msg "Serving command"
+                runInteraction (IOTCM file NonInteractive Direct cmd)
+                msg "Command finished"
+                loop
+
+    recv :: FromJSON a => IO a
+    recv = do
+        md <- receiveJSON conn
+        case md of
+            Just x  -> return x
+            Nothing -> msg "Got garbage" >> recv
+
+-----------------------------------------------------------------
+-- JSON utilities
+
+receiveJSON :: FromJSON a => Connection -> IO (Maybe a)
+receiveJSON = fmap decode . receiveData
+
+sendJSON :: ToJSON a => Connection -> a -> IO ()
+sendJSON c = sendTextData c . encode
 
 instance ToJSON ServerProtocol where
     toJSON (Response r)    = toJSON r
@@ -94,80 +173,3 @@ JSON(CompressedFile)
 JSON(NameKind)
 JSON(C.Induction)
 JSON(DisplayInfo)
-
-main :: IO ()
-main = do
-    ir <- newTVarIO (0 :: Int)
-    runServer "0.0.0.0" 8000 (handle ir)
-
-handle :: TVar Int -> Request -> WebSockets Hybi10 ()
-handle ir rq = do
-    me <- liftIO $ atomically $ do
-        v <- readTVar ir
-        modifyTVar ir succ
-        return v
-    acceptRequest rq
-    spawnPingThread 1
-    sink <- getSink
-    mq <- liftIO $ newTQueueIO
-    void $ liftIO $ forkIO $ interaction me sink mq
-    let body = do
-            d <- receiveData
-            liftIO $ case decode d of
-                Just msg -> atomically (writeTQueue mq msg)
-                Nothing  -> sendJSON sink (ServerError $ "Cannot parse: " ++ show d)
-    forever body `catchWsError` \ _ -> liftIO $ atomically $ writeTQueue mq ByeBye
-
-receiveJSON :: FromJSON a => WebSockets Hybi10 (Maybe a)
-receiveJSON = fmap decode receiveData
-
-sendJSON :: ToJSON a => Sink Hybi10 -> a -> IO ()
-sendJSON s = sendSink s . DataMessage . Text . encode
-
-toCmd :: FilePath -> ClientProtocol -> IO (Maybe Interaction)
-toCmd _    ByeBye           = return Nothing
-toCmd file (Typecheck{txt}) = do
-    T.writeFile file txt
-    return $ Just $ Cmd_load file []
-toCmd _    cl = return $ Just $ case cl of
-    Goal{}            -> Cmd_goal_type_context B.Normalised ip' noRange ""
-    GoalAndInferred{} -> Cmd_goal_type_context_infer B.Normalised ip' noRange txt'
-    Give{}            -> Cmd_give ip' noRange txt'
-    Case{}            -> Cmd_make_case ip' noRange txt'
-    Auto{}            -> Cmd_auto ip' noRange txt'
-    Refine{}          -> Cmd_refine_or_intro False {- assume not in a pattern-matching lambda -}
-                                   ip' noRange txt'
-    Normalise{}       -> Cmd_compute False {- don't ignore abstract or now -}
-                                   ip' noRange txt'
-    ByeBye{}          -> error "impossible"
-    Typecheck{}       -> error "impossible"
-  where
-    ip' = read (show (ip cl))
-    txt' = T.unpack (txt cl)
-
-interaction :: Int -> Sink Hybi10 -> TQueue ClientProtocol -> IO ()
-interaction me sink mq = catchImp $ void $ runTCM $ catchTCM $ do
-    modify $ \ st -> st { stInteractionOutputCallback = liftIO . sendJSON sink . Response }
-    let dir  = "/tmp/" ++ show me
-        file = dir ++ "/Test.agda"
-    liftIO $ createDirectoryIfMissing True dir
-    msg $ "Serving " ++ file
-    evalStateT (unCommandM $ loop file) initCommandState
-  where
-    msg :: MonadIO m => String -> m ()
-    msg = liftIO . putStrLn . (show me ++) . (":" ++)
-
-    catchTCM m = catchError m      (liftIO . sendJSON sink . ServerError <=< prettyError)
-    catchImp m = catchImpossible m (sendJSON sink . ServerError . show)
-
-    loop :: FilePath -> CommandM ()
-    loop file = do
-        m_cmd <- liftIO (toCmd file =<< atomically (readTQueue mq))
-        case m_cmd of
-            Nothing -> return ()
-            Just cmd -> do
-                msg "got command"
-                runInteraction (IOTCM file NonInteractive Direct cmd)
-                msg "command finished"
-                loop file
-
