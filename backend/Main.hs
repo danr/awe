@@ -147,12 +147,12 @@ toCmd _    cl = return $ Just $ case cl of
 
 interaction :: Int -> Sink Hybi10 -> TQueue ClientProtocol -> IO ()
 interaction me sink mq = catchImp $ void $ runTCM $ catchTCM $ do
-    setInteractionOutputCallback (liftIO . sendJSON sink . Response)
+    modify $ \ st -> st { stInteractionOutputCallback = liftIO . sendJSON sink . Response }
     let dir  = "/tmp/" ++ show me
         file = dir ++ "/Test.agda"
     liftIO $ createDirectoryIfMissing True dir
     msg $ "Serving " ++ file
-    evalStateT (loop file) initCommandState
+    evalStateT (unCommandM $ loop file) initCommandState
   where
     msg :: MonadIO m => String -> m ()
     msg = liftIO . putStrLn . (show me ++) . (":" ++)
