@@ -47,17 +47,23 @@ $ ->
                 for other in o.otherAspects
                     add_cls other
 
+    window.substr = (arr,pos,str) ->
+        for i in [0...str.length]
+            if i + pos >= pos.length
+                return false
+            if arr[i + pos] != str[i]
+                return false
+        return true
+
     # TODO: incomplete due to comments and nested holes
-    interaction_points = (ips) ->
+    interaction_points = (ids) ->
         for m in cm.doc.getAllMarks()
             if m.title || m.readOnly
                 m.clear()
 
         rows = cm.doc.getValue().split('\n')
-        l = 0
-        h = 0
 
-        make_ip = (p,q) ->
+        make_ip = (h,p,q) ->
             {line:l1,ch:c1} = p
             {line:l2,ch:c2} = q
             cm.doc.markText (coord l1,c1),(coord l1,c1+2),
@@ -68,31 +74,35 @@ $ ->
                 atomic: true
                 readOnly: true
 
-            console.log "Interaction point #{ips[h]} at",p,q
+            console.log "Interaction point #{h} at",p,q
             cm.doc.markText p,q,
                 className: "Hole"
-                title: "#{ips[h]}"
-            h++
+                title: "#{h}"
 
         start = null
 
-        for row in rows
-            c = 1
-            for [now,last] in zip (tail row), row
-                if now == "?"
-                    cm.doc.replaceRange "{! !}", (coord l,c), (coord l,c+1)
-                    make_ip (coord l,c), (coord l,c+5)
-                    c+=4
+        ips = []
 
-                if last == "{" && now == "!"
-                    start = coord l,c-1
+        # Figure out where the interaction points are,
+        # store them in ips, identifying them with ids
+        for l in [0...rows.length]
+            row = rows[l]
+            for c in [0...row.length]
+                if substr row, c, "?"
+                    ips.push [ids.shift(),l,c,true]
+                if substr row, c, "{!"
+                    start = [l,c]
+                if substr row, c, "!}"
+                    ips.push [ids.shift(),l,c+2,start]
 
-                if last == "!" && now == "}" && start
-                    make_ip start, coord l,c+1
-                    start = null
-
-                c++
-            l++
+        # Reverse them and add them from bottom to top
+        for [id,l,c,mod] in ips.reverse()
+            if mod == true
+                cm.doc.replaceRange "{! !}", (coord l,c), (coord l,c+1)
+                make_ip id, (coord l,c), (coord l,c+5)
+            else
+                [l0,c0] = mod
+                make_ip id, (coord l0,c0), (coord l,c)
 
     set_info = (info) -> $("#info").html info
 
