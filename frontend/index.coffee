@@ -79,21 +79,35 @@ $ ->
                 className: "Hole"
                 title: "#{h}"
 
-        start = null
 
         ips = []
+        comment_nest = 0     # nesting of {- and -}
+        hole_nest = 0        # nesting of {! and !}
+        start = null         # position of {! at nesting 0
 
         # Figure out where the interaction points are,
         # store them in ips, identifying them with ids
         for l in [0...rows.length]
             row = rows[l]
+            comment_row = false
             for c in [0...row.length]
-                if substr row, c, "?"
-                    ips.push [ids.shift(),l,c,true]
-                if substr row, c, "{!"
-                    start = [l,c]
-                if substr row, c, "!}"
-                    ips.push [ids.shift(),l,c+2,start]
+                if substr row, c, "{-"
+                    comment_nest++
+                if substr row, c, "-}"
+                    comment_nest--
+                if substr row, c, "--"
+                    comment_row = true
+                if !comment_row && comment_nest == 0
+                    if substr row, c, "?"
+                        ips.push [ids.shift(),l,c,true]
+                    if substr row, c, "{!"
+                        if hole_nest == 0
+                            start = [l,c]
+                        hole_nest++
+                    if substr row, c, "!}"
+                        hole_nest--
+                        if hole_nest == 0
+                            ips.push [ids.shift(),l,c+2,start]
 
         # Reverse them and add them from bottom to top
         for [id,l,c,mod] in ips.reverse()
