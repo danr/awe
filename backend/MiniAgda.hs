@@ -10,7 +10,7 @@ import Control.Monad.Error
 -- import qualified Data.Map as Map
 
 import System.Exit
-import Agda.Interaction.GhcTop (mimicGHCi)
+import Agda.Interaction.EmacsTop (mimicGHCi)
 
 import Agda.TypeChecking.Monad
 import Agda.TypeChecking.Errors

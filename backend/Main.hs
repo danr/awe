@@ -24,7 +24,7 @@ import Control.Concurrent.STM
 import Agda.Interaction.FindFile
 import Agda.Interaction.Highlighting.Precise hiding (String)
 import Agda.Interaction.Highlighting.Range
-import Agda.Interaction.InteractionTop
+import Agda.Interaction.InteractionTop hiding (Refine, Give)
 import Agda.Interaction.Response
 import qualified Agda.Interaction.BasicOps as B
 
@@ -95,11 +95,15 @@ toCmd _    cl = return $ Just $ case cl of
     txt' = T.unpack (txt cl)
 
 interaction :: Int -> Connection -> IO ()
-interaction me conn = catchImp $ void $ runTCM $ catchTCM $ do
-    modify $ \ st -> st { stInteractionOutputCallback = liftIO . sendJSON conn . Response }
+interaction me conn = catchImp $ void $ runTCMTop  $ catchTCM $ do
+    modify $ \ st -> st {
+            stPersistent = (stPersistent st) {
+                stInteractionOutputCallback = liftIO . sendJSON conn . Response
+            }
+        }
     liftIO $ createDirectoryIfMissing True dir
     msg $ "Serving " ++ file
-    evalStateT (unCommandM loop) initCommandState
+    evalStateT loop initCommandState
   where
     dir  = "/tmp/" ++ show me
     file = dir ++ "/Test.agda"
@@ -163,7 +167,8 @@ $(deriveToJSON defaultOptions { constructorTagModifier = drop 5 } ''Response)
                                 -- drop Resp_ from Response constructors
 
 JSON(GiveResult)
-JSON(InteractionId)
+JSON(C.InteractionId)
+JSON(MakeCaseVariant)
 JSON(Status)
 JSON(SC.TopLevelModuleName)
 JSON(MetaInfo)

@@ -13,9 +13,9 @@ executable awe
   ghc-options:       -threaded -Wall
   build-depends:
         base       >= 4.5
-      , Agda       == 2.3.2.2
-      , aeson      >= 0.6.2.0 && < 0.6.3
-      , websockets == 0.8.0.*
+      , Agda       == 2.4.0
+      , aeson      >= 0.7.0.0
+      , websockets >= 0.8.2
       , directory
       , pretty
       , mtl
